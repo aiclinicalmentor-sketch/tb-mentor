@@ -1,16 +1,16 @@
-// app/page.tsx
+// app/chat/page.tsx
 
 "use client";
 
 import React, { useState } from "react";
-import type { ChatMessage } from "../lib/llmClient";
+import type { ChatMessage } from "../../lib/llmClient";
 
 interface UiMessage {
   role: "user" | "assistant";
   content: string;
 }
 
-export default function HomePage() {
+export default function ChatPage() {
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -24,7 +24,7 @@ export default function HomePage() {
     setLoading(true);
 
     try {
-      // Convert to backend message format (no system message, it’s added server-side)
+      // Convert to backend message format (no system message; added server-side)
       const payloadMessages: ChatMessage[] = newMessages.map((m) => ({
         role: m.role,
         content: m.content

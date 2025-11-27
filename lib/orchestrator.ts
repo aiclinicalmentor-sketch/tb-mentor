@@ -23,6 +23,15 @@ Then provide only high-level educational comments if appropriate and emphasize t
 
 II. CORE WORKFLOW (MANDATORY)
 
+**FIRST REPLY RULE**
+For the very first assistant reply in a new conversation (only one user message so far), you MUST:
+- Treat the scenario as incomplete, and
+- Focus on CLARIFY/INTAKE: restate the case in one sentence, then ask 2–4 targeted questions to fill in missing TB-critical variables (HIV status, TB exposure, weight/growth, DST history, severity, comorbidities, site profile).
+You are NOT allowed to give TB-specific recommendations or probabilities or to call any tools in this first reply.
+End this first reply with a status footer like:
+Status: ask | intake | low
+
+
 1. CLARIFY (INTAKE)
 Before you call the RAG tool or the pediatric TDA tool, ensure you understand:
 - DS-TB vs RR/MDR/XDR-TB status (known, suspected, or unknown)
@@ -96,6 +105,10 @@ Status: <MODE> | <PHASE> | <CONFIDENCE>
 MODE: ask | respond | plan | teach | summarize | reflect
 PHASE: intake | clarify | synthesize | plan | debrief
 CONFIDENCE: low | medium | high
+
+When information is very limited (for example a one- or two-sentence vignette without HIV status, exposure history, investigations, or site profile), you MUST:
+- Explicitly state that more information is needed before assigning high TB probability or giving treatment recommendations, and
+- Set CONFIDENCE = low.
 
 Choose MODE and PHASE based on what you mainly did in that reply, and set CONFIDENCE according to how strong the evidence and retrieval are.
 
@@ -214,89 +227,96 @@ async function callTdaBackend(patientJson: string): Promise<any> {
 export async function runTbMentorTurn(
   userMessages: ChatMessage[]
 ): Promise<{ reply: string; debug?: any }> {
-  const systemMessage: ChatMessage = {
-    role: "system",
-    content: SYSTEM_PROMPT
-  };
+const systemMessage: ChatMessage = {
+  role: "system",
+  content: SYSTEM_PROMPT
+};
 
-  const messages: ChatMessage[] = [systemMessage, ...userMessages];
+const messages: ChatMessage[] = [systemMessage, ...userMessages];
 
-  // First call: let the model decide if it needs tools
-  const first = await callModel(messages, {
-    tools: tbTools,
-    toolChoice: "auto"
-  });
+const isFirstTurn =
+  userMessages.length === 1 &&
+  userMessages[0].role === "user";
 
-  const assistant1 = first.assistantMessage;
-  const toolCalls = assistant1.tool_calls;
+// First call: clarifying vs tools
+const first = await callModel(messages, {
+  tools: isFirstTurn ? undefined : tbTools,
+  toolChoice: isFirstTurn ? "none" : "auto"
+});
 
-  if (!toolCalls || toolCalls.length === 0) {
-    // No tools – just return the answer
-    return { reply: assistant1.content, debug: { step: "no-tools", raw: first.raw } };
-  }
+const assistant1 = first.assistantMessage;
+const toolCalls = assistant1.tool_calls;
 
-  // Handle tool calls (RAG and/or TDA), single round
-  const toolMessages: ChatMessage[] = [];
-
-  for (const call of toolCalls as ToolCall[]) {
-    const { name, arguments: argString } = call.function;
-    let args: any;
-    try {
-      args = JSON.parse(argString || "{}");
-    } catch (e) {
-      args = {};
-    }
-
-    if (name === "rag_query") {
-      const question = args.question ?? "";
-      const ragResult = await callRagBackend(question);
-
-      toolMessages.push({
-        role: "tool",
-        name: "rag_query",
-        tool_call_id: call.id,
-        content: JSON.stringify(ragResult)
-      });
-    } else if (name === "tda") {
-      const patientJson = args.patient_json ?? "{}";
-      const tdaResult = await callTdaBackend(patientJson);
-
-      toolMessages.push({
-        role: "tool",
-        name: "tda",
-        tool_call_id: call.id,
-        content: JSON.stringify(tdaResult)
-      });
-    } else {
-      // Unknown tool; send back an error-like message
-      toolMessages.push({
-        role: "tool",
-        name,
-        tool_call_id: call.id,
-        content: JSON.stringify({ error: `Unknown tool: ${name}` })
-      });
-    }
-  }
-
-  // Second call: give the model its own tool request + the tool results, force no further tools
-  const secondMessages: ChatMessage[] = [
-    systemMessage,
-    ...userMessages,
-    assistant1,
-    ...toolMessages
-  ];
-
-  const second = await callModel(secondMessages, {
-    tools: tbTools,
-    toolChoice: "none"
-  });
-
+// If it's the very first turn or there are no tool calls, just answer
+if (isFirstTurn || !toolCalls || toolCalls.length === 0) {
   return {
-    reply: second.assistantMessage.content,
-    debug: {
-      step: "tools-used",
-      firstRaw: first.raw,
-      secondRaw: second.raw
-    }
+    reply: assistant1.content,
+    debug: { step: isFirstTurn ? "first-turn-no-tools" : "no-tools", raw: first.raw }
   };
+}
+
+// Handle tool calls (RAG and/or TDA), single round
+const toolMessages: ChatMessage[] = [];
+
+for (const call of toolCalls as ToolCall[]) {
+  const { name, arguments: argString } = call.function;
+  let args: any;
+  try {
+    args = JSON.parse(argString || "{}");
+  } catch (e) {
+    args = {};
+  }
+
+  if (name === "rag_query") {
+    const question = args.question ?? "";
+    const ragResult = await callRagBackend(question);
+
+    toolMessages.push({
+      role: "tool",
+      name: "rag_query",
+      tool_call_id: call.id,
+      content: JSON.stringify(ragResult)
+    });
+  } else if (name === "tda" || name === "tb_peds_tda") {
+    const patientJson = args.patient_json ?? "{}";
+    const tdaResult = await callTdaBackend(patientJson);
+
+    toolMessages.push({
+      role: "tool",
+      name,
+      tool_call_id: call.id,
+      content: JSON.stringify(tdaResult)
+    });
+  } else {
+    // Unknown tool; send back an error-like message
+    toolMessages.push({
+      role: "tool",
+      name,
+      tool_call_id: call.id,
+      content: JSON.stringify({ error: `Unknown tool: ${name}` })
+    });
+  }
+}
+
+// Second call: give the model its own tool request + the tool results, force no further tools
+const secondMessages: ChatMessage[] = [
+  systemMessage,
+  ...userMessages,
+  assistant1,
+  ...toolMessages
+];
+
+const second = await callModel(secondMessages, {
+  tools: tbTools,
+  toolChoice: "none"
+});
+
+return {
+  reply: second.assistantMessage.content,
+  debug: {
+    step: "tools-used",
+    firstRaw: first.raw,
+    secondRaw: second.raw
+  }
+};
 }

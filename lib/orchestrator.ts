@@ -186,11 +186,18 @@ async function callRagBackend(question: string): Promise<any> {
   const url = process.env.RAG_QUERY_URL;
   if (!url) throw new Error("Missing RAG_QUERY_URL env var.");
 
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question })
-  });
+  console.log("[TB-Mentor] Calling RAG backend", { url, question });
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question })
+    });
+  } catch (e: any) {
+    throw new Error(`RAG backend fetch failed (url=${url}): ${e?.message || e}`);
+  }
 
   if (!resp.ok) {
     const text = await resp.text();
@@ -204,11 +211,18 @@ async function callTdaBackend(patientJson: string): Promise<any> {
   const url = process.env.TDA_QUERY_URL;
   if (!url) throw new Error("Missing TDA_QUERY_URL env var.");
 
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ patient_json: patientJson })
-  });
+  console.log("[TB-Mentor] Calling TDA backend", { url });
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patient_json: patientJson })
+    });
+  } catch (e: any) {
+    throw new Error(`TDA backend fetch failed (url=${url}): ${e?.message || e}`);
+  }
 
   if (!resp.ok) {
     const text = await resp.text();
